@@ -13,6 +13,7 @@ const DEFAULT_HOST = "127.0.0.1"
 const DEFAULT_PORT = 42188
 const CATALOG_CACHE_MS = 30000
 const FILE_INVENTORY_CACHE_MS = 15000
+const PREVIEW_FETCH_TIMEOUT_MS = 30000
 const LARGE_FILE_BYTES = 1024 ** 3
 
 const MIME_TYPES = {
@@ -66,6 +67,10 @@ const HOST = getArg("host", process.env.HOST || DEFAULT_HOST)
 const PORT = Number(getArg("port", process.env.PORT || DEFAULT_PORT))
 
 function sendJson(res, status, payload) {
+  if (res.destroyed || res.headersSent) {
+    if (!res.destroyed && !res.writableEnded) res.end()
+    return
+  }
   const body = JSON.stringify(payload)
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
@@ -392,26 +397,46 @@ async function proxyRemoteAsset(remoteUrl, res) {
   if (!["http:", "https:"].includes(url.protocol) || !isLoopbackHost(url.hostname)) {
     return sendError(res, 400, "Preview URL must point at a loopback ComfyUI server")
   }
-  const response = await fetch(remoteUrl, {
-    headers: { "user-agent": "ComfyFS/0.1" }
-  })
-  if (!response.ok || !response.body) {
-    return sendError(res, response.status, "Preview asset not found")
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), PREVIEW_FETCH_TIMEOUT_MS)
+  const abortRequest = () => {
+    if (!res.writableEnded) controller.abort()
   }
-  const upstreamContentType = response.headers.get("content-type")
-  const headers = {
-    "content-type": upstreamContentType && upstreamContentType !== "application/octet-stream"
-      ? upstreamContentType
-      : contentTypeFromPath(url.pathname),
-    "cache-control": "public, max-age=3600"
+  res.once("close", abortRequest)
+
+  try {
+    const response = await fetch(remoteUrl, {
+      headers: { "user-agent": "ComfyFS/0.1" },
+      signal: controller.signal
+    })
+    if (!response.ok) {
+      return sendError(res, response.status, "Preview asset not found")
+    }
+    const upstreamContentType = response.headers.get("content-type")
+    const body = Buffer.from(await response.arrayBuffer())
+    const headers = {
+      "content-type": upstreamContentType && upstreamContentType !== "application/octet-stream"
+        ? upstreamContentType
+        : contentTypeFromPath(url.pathname),
+      "cache-control": "public, max-age=3600",
+      "content-length": body.length
+    }
+    if (res.destroyed || res.writableEnded) return
+    res.writeHead(200, headers)
+    res.end(body)
+  } catch (error) {
+    if (res.destroyed || res.headersSent) return
+    const timedOut = error && error.name === "AbortError"
+    return sendError(
+      res,
+      timedOut ? 504 : 502,
+      timedOut ? "Preview asset request timed out" : "Preview asset request failed",
+      error.message
+    )
+  } finally {
+    clearTimeout(timeout)
+    res.off("close", abortRequest)
   }
-  const contentLength = response.headers.get("content-length")
-  if (contentLength) headers["content-length"] = contentLength
-  res.writeHead(200, headers)
-  for await (const chunk of response.body) {
-    if (!res.write(chunk)) await once(res, "drain")
-  }
-  res.end()
 }
 
 function contentTypeFromPath(value) {
