@@ -604,7 +604,7 @@ function renderTemplateDetail(target, candidates = state.templates, empty = {}) 
   const openUrl = comfyTemplateUrl(template)
   const openClass = missing.length ? "button-link secondary" : "button-link"
   const openAction = openUrl
-    ? `<a class="${openClass}" href="${escapeHtml(openUrl)}" target="_blank" rel="noopener noreferrer">${buttonContent("external", "Open in ComfyUI")}</a>`
+    ? `<a class="${openClass}" href="${escapeHtml(openUrl)}" data-action="open-comfyui" target="_blank" rel="noopener noreferrer">${buttonContent("external", "Open in ComfyUI")}</a>`
     : `<button class="secondary" disabled>${buttonContent("external", "Open in ComfyUI")}</button>`
   const bookmarked = isBookmarked(template)
   const bookmarkAction = `<button class="secondary" data-action="toggle-bookmark" data-id="${escapeHtml(template.id)}">${buttonContent("bookmark", bookmarked ? "Remove bookmark" : "Bookmark")}</button>`
@@ -1571,6 +1571,13 @@ document.querySelectorAll(".filter[data-filter]").forEach((button) => {
 })
 
 document.addEventListener("click", async (event) => {
+  const comfyLink = event.target.closest('a[data-action="open-comfyui"]')
+  if (comfyLink) {
+    event.preventDefault()
+    window.open(comfyLink.href, "_blank", "browser")
+    return
+  }
+
   const button = event.target.closest("button[data-action]")
   if (!button) {
     const card = event.target.closest(".template-card[data-id]")
