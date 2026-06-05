@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ComfyFS</title>
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <script>
+      (() => {
+        const key = "comfyfs-theme"
+        let stored = ""
+        try {
+          stored = localStorage.getItem(key) || ""
+        } catch {
+          stored = ""
+        }
+        const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches
+        document.documentElement.dataset.theme = stored || (prefersDark ? "dark" : "light")
+      })()
+    </script>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar" aria-label="Primary navigation">
+        <nav class="view-tabs" aria-label="Primary views">
+          <button type="button" class="view-tab active" data-view="templates">
+            <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
+              <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
+              <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
+              <path d="M14 15h7"></path>
+              <path d="M14 20h7"></path>
+            </svg>
+            <span>Catalog</span>
+          </button>
+          <button type="button" class="view-tab" data-view="files">
+            <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10l2 2.5h5.5A2.5 2.5 0 0 1 20 9v8.5a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5Z"></path>
+              <path d="M7.5 12h9"></path>
+              <path d="M7.5 15.5h5"></path>
+            </svg>
+            <span>Files</span>
+          </button>
+          <button type="button" class="view-tab" data-view="bookmarks">
+            <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 4.75A2.75 2.75 0 0 1 8.75 2h6.5A2.75 2.75 0 0 1 18 4.75V21l-6-3.5L6 21Z"></path>
+            </svg>
+            <span>Bookmarks</span>
+          </button>
+          <button class="toolbar-icon-button" id="refresh-button" type="button" aria-label="Refresh current view" title="Refresh current view">
+            <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 12a9 9 0 0 1-15.5 6.2"></path>
+              <path d="M3 12A9 9 0 0 1 18.5 5.8"></path>
+              <path d="M18.5 2.8v3h-3"></path>
+              <path d="M5.5 21.2v-3h3"></path>
+            </svg>
+          </button>
+        </nav>
+
+        <form class="connect" id="connect-form" aria-label="Connect to ComfyUI">
+          <div class="connect-row">
+            <span class="connection-dot" id="connection-dot" aria-hidden="true"></span>
+            <input id="base-url" name="baseUrl" value="http://127.0.0.1:8188" autocomplete="off" aria-label="ComfyUI URL" />
+            <button type="submit">Connect</button>
+          </div>
+        </form>
+
+        <div class="theme-actions" role="group" aria-label="Theme">
+          <button class="toolbar-icon-button" id="theme-light" type="button" aria-label="Use light theme" aria-pressed="false" title="Light theme">
+            <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="4"></circle>
+              <path d="M12 2v2"></path>
+              <path d="M12 20v2"></path>
+              <path d="m4.93 4.93 1.41 1.41"></path>
+              <path d="m17.66 17.66 1.41 1.41"></path>
+              <path d="M2 12h2"></path>
+              <path d="M20 12h2"></path>
+              <path d="m6.34 17.66-1.41 1.41"></path>
+              <path d="m19.07 4.93-1.41 1.41"></path>
+            </svg>
+          </button>
+          <button class="toolbar-icon-button" id="theme-dark" type="button" aria-label="Use dark theme" aria-pressed="false" title="Dark theme">
+            <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.5 8.5 0 1 0 20.5 15.2Z"></path>
+            </svg>
+          </button>
+        </div>
+      </section>
+
+      <section class="jobs" id="jobs" aria-live="polite" hidden>
+        <div class="jobs-header">
+          <span class="eyebrow">Downloads</span>
+          <strong id="jobs-title">No active jobs</strong>
+        </div>
+        <div id="jobs-list"></div>
+      </section>
+
+      <section class="workspace" id="templates-view">
+        <aside class="template-nav" id="template-nav" aria-label="Template categories"></aside>
+
+        <div class="catalog">
+          <div class="toolbar">
+            <div class="search-wrap">
+              <label for="search">Search templates</label>
+              <input id="search" placeholder="Flux, Qwen, video, LoRA..." />
+            </div>
+            <div class="filters" role="group" aria-label="Template status filters">
+              <button class="filter active" data-filter="all">Any status</button>
+              <button class="filter" data-filter="missing">Missing</button>
+              <button class="filter" data-filter="ready">Ready</button>
+              <button class="filter" data-filter="cloud">API</button>
+              <button class="filter" data-filter="unknown">Unknown</button>
+            </div>
+          </div>
+          <div class="notice" id="notice">Connect to a running local ComfyUI to inspect template files.</div>
+          <div class="template-grid" id="template-grid"></div>
+        </div>
+
+        <aside class="detail" id="detail" aria-label="Template details">
+          <div class="detail-empty">
+            <span class="eyebrow">Selection</span>
+            <h2>No template selected</h2>
+            <p>Choose a template to see required files and destination folders.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="bookmarks-workspace" id="bookmarks-view" hidden>
+        <div class="catalog">
+          <div class="toolbar bookmarks-toolbar">
+            <div>
+              <span class="eyebrow">Bookmarks</span>
+              <h2>Bookmarked workflows</h2>
+            </div>
+          </div>
+          <div class="notice" id="bookmarks-notice">Bookmark workflows from the template detail panel.</div>
+          <div class="template-grid" id="bookmarks-grid"></div>
+        </div>
+
+        <aside class="detail" id="bookmarks-detail" aria-label="Bookmark details">
+          <div class="detail-empty">
+            <span class="eyebrow">Selection</span>
+            <h2>No bookmark selected</h2>
+            <p>Choose a bookmarked workflow to open it in ComfyUI or manage its required files.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="files-workspace" id="files-view" hidden>
+        <aside class="file-root-nav" id="file-root-filters" aria-label="Model roots"></aside>
+
+        <div class="files-panel">
+          <div class="files-header">
+            <div>
+              <span class="eyebrow">Model Files</span>
+              <h2>Model Files</h2>
+              <p>All ComfyUI model roots in one browsable tree.</p>
+            </div>
+            <div class="files-search">
+              <label for="file-search">Search files</label>
+              <input id="file-search" placeholder="safetensors, qwen, flux..." />
+            </div>
+          </div>
+          <div class="file-summary" id="file-summary"></div>
+          <div class="file-filter-row">
+            <div class="file-filter-group" id="file-status-filters" aria-label="File status filters">
+              <button class="filter active" data-file-filter="all">All</button>
+              <button class="filter" data-file-filter="referenced">Referenced</button>
+              <button class="filter" data-file-filter="unused">Unused</button>
+              <button class="filter" data-file-filter="large">Large</button>
+              <button class="filter" data-file-filter="partial">Partial</button>
+              <button class="filter" data-file-filter="local">Other</button>
+            </div>
+          </div>
+          <div class="file-bulk-bar" id="file-bulk-bar" hidden></div>
+          <div class="notice" id="files-notice">Open Files to scan ComfyUI model roots.</div>
+          <div class="file-tree" id="file-tree"></div>
+        </div>
+
+        <aside class="detail file-detail" id="file-detail" aria-label="File details">
+          <div class="detail-empty">
+            <span class="eyebrow">Selection</span>
+            <h2>No file selected</h2>
+            <p>Choose a file to see size, path, and template references.</p>
+          </div>
+        </aside>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

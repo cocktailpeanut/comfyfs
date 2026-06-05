@@ -1,0 +1,5 @@
+{
+  "title": "ComfyFS",
+  "description": "Browse ComfyUI workflow templates and manage missing model files in the folders exposed by a running local ComfyUI server.",
+  "icon": "icon.png"
+}

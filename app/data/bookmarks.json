@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "bookmarks": [
+    {
+      "id": "default:template_seedance_2_0_plus_llm_prompt_helper",
+      "templateId": "template_seedance_2_0_plus_llm_prompt_helper",
+      "sourceModule": "default",
+      "title": "Seedance 2.0 + LLM Prompt Helper",
+      "createdAt": "2026-06-05T16:26:31.713Z",
+      "updatedAt": "2026-06-05T16:26:31.713Z"
+    },
+    {
+      "id": "default:gsl_starter_1_1",
+      "templateId": "gsl_starter_1_1",
+      "sourceModule": "default",
+      "title": "1.1 Starter – Text to Image",
+      "createdAt": "2026-06-04T06:07:29.784Z",
+      "updatedAt": "2026-06-04T06:07:29.785Z"
+    }
+  ]
+}
