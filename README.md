@@ -71,7 +71,7 @@ Catalog is where you browse ComfyUI workflow templates.
   - **Unknown** means the template does not declare enough local model metadata.
 - Use the left sidebar to browse template categories.
 - Select a card to open the detail panel.
-- From the detail panel you can open the workflow in ComfyUI, bookmark it, download missing files, or remove installed files when needed.
+- From the detail panel you can open the workflow in ComfyUI inside the current Pinokio frame, use the external-link icon to open it in your browser, bookmark it, install individual missing files, download all missing files, or remove installed files when needed.
 
 The most common workflow is: filter to **Missing**, pick a template, review the required files, then download only the files needed for that workflow.
 
@@ -112,8 +112,8 @@ Bookmarks are stored in `app/data/bookmarks.json`, so they survive browser stora
 2. Search for the model or workflow type you want.
 3. Filter by **Missing** if you want templates that need downloads, or **Ready** if you want something runnable now.
 4. Select a template.
-5. Download missing files from the detail panel.
-6. Click **Open in ComfyUI**.
+5. Install individual missing files or download all missing files from the detail panel.
+6. Click **Open in ComfyUI** to open it inside the current Pinokio frame, or use the external-link icon beside it to open ComfyUI in your browser.
 
 ### Find Where Storage Is Going
 

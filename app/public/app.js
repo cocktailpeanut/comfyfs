@@ -1,4 +1,6 @@
 const THEME_KEY = "comfyfs-theme"
+const DOWNLOAD_CLEAR_DELAY_MS = 4500
+const ACTIVE_JOB_STATUSES = new Set(["queued", "running"])
 
 const state = {
   theme: document.documentElement.dataset.theme === "dark" ? "dark" : "light",
@@ -21,7 +23,9 @@ const state = {
   selectedFileIds: new Set(),
   bulkDeleting: false,
   fileDeleting: null,
+  modelSizeLookups: new Set(),
   jobs: new Map(),
+  jobClearTimers: new Map(),
   polling: new Map()
 }
 
@@ -71,11 +75,13 @@ function iconMarkup(name) {
     bookmark: '<path d="M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z"></path>',
     download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M7 10l5 5 5-5"></path><path d="M12 15V3"></path>',
     external: '<path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>',
+    frame: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M8 12h8"></path><path d="m13 8 4 4-4 4"></path>',
     file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><path d="M14 2v6h6"></path>',
     folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1"></path><path d="M3.2 10h17.6l-1.4 8.4A2 2 0 0 1 17.4 20H6.6a2 2 0 0 1-2-1.6Z"></path>',
     listCheck: '<path d="M11 6h10"></path><path d="M11 12h10"></path><path d="M11 18h10"></path><path d="m3 6 1 1 2-2"></path><path d="m3 12 1 1 2-2"></path><path d="m3 18 1 1 2-2"></path>',
     check: '<path d="M20 6 9 17l-5-5"></path>',
-    trash: '<path d="M3 6h18"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>'
+    trash: '<path d="M3 6h18"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>',
+    x: '<path d="M18 6 6 18"></path><path d="m6 6 12 12"></path>'
   }
   return `<svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || ""}</svg>`
 }
@@ -196,6 +202,11 @@ function comfyTemplateUrl(template) {
   } catch {
     return ""
   }
+}
+
+function openComfyPopout(url) {
+  console.log("openComfy", url)
+  window.open(url, "_blank", "browser")
 }
 
 function statusLabel(status, missingCount = 0) {
@@ -436,6 +447,92 @@ function applyCompletedDownloads(job) {
   return changed
 }
 
+function isJobActive(job) {
+  return ACTIVE_JOB_STATUSES.has(job?.status)
+}
+
+function isJobSuccessful(job) {
+  return job?.status === "finished" && !Number(job.errors || 0)
+}
+
+function isJobFinal(job) {
+  return Boolean(job && !isJobActive(job))
+}
+
+function jobStatusLabel(job) {
+  if (job.status === "queued") return "Queued"
+  if (job.status === "running") return "Downloading"
+  if (isJobSuccessful(job)) return "Downloaded"
+  if (job.status === "finished_with_errors") return "Finished with errors"
+  if (job.status === "error") return "Download failed"
+  return job.status || "Download"
+}
+
+function jobByteTotals(job) {
+  const items = job.items || []
+  return {
+    downloaded: items.reduce((sum, item) => sum + Number(item.downloaded || 0), 0),
+    total: items.reduce((sum, item) => sum + Number(item.total || 0), 0)
+  }
+}
+
+function jobProgressPercent(job) {
+  const { downloaded, total } = jobByteTotals(job)
+  if (isJobSuccessful(job)) return 100
+  if (total > 0) return Math.min(100, Math.round((downloaded / total) * 100))
+  return Math.min(100, Math.round((Number(job.completed || 0) / Math.max(1, Number(job.total || 1))) * 100))
+}
+
+function jobCurrentItem(job) {
+  const items = job.items || []
+  return (
+    items.find((item) => item.status === "downloading") ||
+    items.find((item) => item.status === "error") ||
+    items[Number(job.completed || 0)] ||
+    items.at(-1) ||
+    null
+  )
+}
+
+function completedJobItem(job) {
+  return (job.items || []).find((item) => item.destination && ["done", "skipped"].includes(item.status)) || null
+}
+
+function jobFilesLabel(job) {
+  const count = Number(job.total || 0)
+  return `${count} file${count === 1 ? "" : "s"}`
+}
+
+function jobSummary(job) {
+  const names = (job.items || []).map((item) => item.name).filter(Boolean)
+  const visible = names.slice(0, 2).join(", ")
+  const extra = names.length > 2 ? `, +${names.length - 2} more` : ""
+  const { downloaded, total } = jobByteTotals(job)
+  const size = total || downloaded
+  return `${visible || jobFilesLabel(job)}${extra}${size ? ` - ${formatBytes(size)}` : ""}`
+}
+
+function scheduleJobClear(job) {
+  if (!isJobSuccessful(job) || state.jobClearTimers.has(job.id)) return
+  const timer = setTimeout(() => {
+    state.jobClearTimers.delete(job.id)
+    const latest = state.jobs.get(job.id)
+    if (isJobSuccessful(latest)) {
+      state.jobs.delete(job.id)
+      renderJobs()
+    }
+  }, DOWNLOAD_CLEAR_DELAY_MS)
+  state.jobClearTimers.set(job.id, timer)
+}
+
+function clearJob(id) {
+  const timer = state.jobClearTimers.get(id)
+  if (timer) clearTimeout(timer)
+  state.jobClearTimers.delete(id)
+  state.jobs.delete(id)
+  renderJobs()
+}
+
 function applyDeletedModel(deletedModel) {
   let changed = false
   const deletedKey = `${deletedModel.directory}\n${deletedModel.name}`
@@ -580,8 +677,66 @@ function fileActions(template, model, index) {
   const actions = [fileStatus(model)]
   if (model.installed) {
     actions.push(`<button class="danger compact" data-action="delete-model" data-id="${escapeHtml(template.id)}" data-model-index="${index}">${buttonContent("trash", "Delete")}</button>`)
+  } else if (model.downloadable) {
+    actions.push(`<button class="compact" data-action="download-model" data-id="${escapeHtml(template.id)}" data-model-index="${index}">${buttonContent("download", "Install")}</button>`)
   }
   return `<div class="file-actions">${actions.join("")}</div>`
+}
+
+function modelLookupKey(model) {
+  return `${model.directory || ""}\n${model.name || ""}\n${model.url || ""}`
+}
+
+function modelFileMeta(model) {
+  const parts = [model.directory || "unknown folder"]
+  const size = Number(model.size || 0)
+  if (size > 0) {
+    parts.push(formatBytes(size))
+  } else if (model.sizeChecking) {
+    parts.push("checking size")
+  }
+  return parts.join(" - ")
+}
+
+async function queueModelSizeLookup(template) {
+  if (!state.baseUrl || !template?.models?.length) return
+  const pending = template.models.filter((model) => (
+    model.downloadable &&
+    !model.sizeChecked &&
+    !Number(model.size || 0)
+  ))
+  if (!pending.length) return
+
+  const lookupKey = templateBookmarkKey(template)
+  if (state.modelSizeLookups.has(lookupKey)) return
+  state.modelSizeLookups.add(lookupKey)
+  pending.forEach((model) => {
+    model.sizeChecking = true
+  })
+
+  try {
+    const result = await requestJson("/api/model-sizes", {
+      method: "POST",
+      body: JSON.stringify({ baseUrl: state.baseUrl, models: pending })
+    })
+    const sizes = new Map(
+      (result.models || []).map((model) => [modelLookupKey(model), Number(model.size || 0)])
+    )
+    for (const model of pending) {
+      const size = sizes.get(modelLookupKey(model)) || 0
+      if (size > 0) model.size = size
+      model.sizeChecked = true
+      model.sizeChecking = false
+    }
+  } catch {
+    pending.forEach((model) => {
+      model.sizeChecked = true
+      model.sizeChecking = false
+    })
+  } finally {
+    state.modelSizeLookups.delete(lookupKey)
+    renderAll()
+  }
 }
 
 function renderTemplateDetail(target, candidates = state.templates, empty = {}) {
@@ -598,14 +753,18 @@ function renderTemplateDetail(target, candidates = state.templates, empty = {}) 
   }
 
   const missing = template.models.filter((model) => !model.installed && model.downloadable)
+  queueModelSizeLookup(template)
   const downloadAction = missing.length
     ? `<button data-action="download-template" data-id="${escapeHtml(template.id)}">${buttonContent("download", "Download missing files")}</button>`
     : ""
   const openUrl = comfyTemplateUrl(template)
   const openClass = missing.length ? "button-link secondary" : "button-link"
   const openAction = openUrl
-    ? `<a class="${openClass}" href="${escapeHtml(openUrl)}" data-action="open-comfyui" target="_blank" rel="noopener noreferrer">${buttonContent("external", "Open in ComfyUI")}</a>`
-    : `<button class="secondary" disabled>${buttonContent("external", "Open in ComfyUI")}</button>`
+    ? `<div class="open-comfyui-group">
+        <a class="${openClass} open-comfyui-frame" href="${escapeHtml(openUrl)}" data-action="open-comfyui-frame" target="_self" aria-label="Open workflow in ComfyUI here">${buttonContent("frame", "Open in ComfyUI")}</a>
+        <a class="${openClass} open-comfyui-popout" href="${escapeHtml(openUrl)}" data-action="open-comfyui" target="_blank" rel="noopener noreferrer" title="Open in browser" aria-label="Open in browser">${iconMarkup("external")}</a>
+      </div>`
+    : `<button class="secondary" disabled>${buttonContent("frame", "Open in ComfyUI")}</button>`
   const bookmarked = isBookmarked(template)
   const bookmarkAction = `<button class="secondary" data-action="toggle-bookmark" data-id="${escapeHtml(template.id)}">${buttonContent("bookmark", bookmarked ? "Remove bookmark" : "Bookmark")}</button>`
   const actions = [downloadAction, openAction, bookmarkAction].filter(Boolean).join("")
@@ -616,7 +775,7 @@ function renderTemplateDetail(target, candidates = state.templates, empty = {}) 
             <div class="file-row">
               <div>
                 <strong>${escapeHtml(model.name)}</strong>
-                <div class="file-meta">${escapeHtml(model.directory || "unknown folder")}</div>
+                <div class="file-meta">${escapeHtml(modelFileMeta(model))}</div>
               </div>
               ${fileActions(template, model, index)}
             </div>
@@ -1104,22 +1263,63 @@ function renderJobs() {
   const jobs = Array.from(state.jobs.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   els.jobs.hidden = jobs.length === 0
   if (!jobs.length) return
-  els.jobsTitle.textContent = `${jobs.length} download${jobs.length === 1 ? "" : "s"}`
+  const activeCount = jobs.filter(isJobActive).length
+  const errorCount = jobs.filter((job) => !isJobActive(job) && !isJobSuccessful(job)).length
+  if (activeCount) {
+    els.jobsTitle.textContent = `${activeCount} active download${activeCount === 1 ? "" : "s"}`
+  } else if (errorCount) {
+    els.jobsTitle.textContent = `${errorCount} download issue${errorCount === 1 ? "" : "s"}`
+  } else {
+    els.jobsTitle.textContent = "Download complete"
+  }
   els.jobsList.innerHTML = jobs
     .map((job) => {
-      const downloaded = job.items.reduce((sum, item) => sum + Number(item.downloaded || 0), 0)
-      const total = job.items.reduce((sum, item) => sum + Number(item.total || 0), 0)
-      const percent = total ? Math.min(100, Math.round((downloaded / total) * 100)) : Math.round((job.completed / job.total) * 100)
-      const current = job.items.find((item) => item.status === "downloading") || job.items[job.completed] || job.items.at(-1)
+      const status = jobStatusLabel(job)
+      const percent = jobProgressPercent(job)
+      const current = jobCurrentItem(job)
+      const reveal = completedJobItem(job)
+      const revealIndex = reveal ? (job.items || []).indexOf(reveal) : -1
+      const { downloaded, total } = jobByteTotals(job)
+
+      if (isJobSuccessful(job)) {
+        return `
+          <div class="job job-complete" data-job-id="${escapeHtml(job.id)}">
+            <div class="job-compact">
+              <span class="job-status-icon" aria-hidden="true">${iconMarkup("check")}</span>
+              <div class="job-copy">
+                <strong>${escapeHtml(status)} ${escapeHtml(jobFilesLabel(job))}</strong>
+                <span>${escapeHtml(jobSummary(job))}</span>
+              </div>
+              <div class="job-actions">
+                ${
+                  reveal
+                    ? `<button class="secondary compact" data-job-action="reveal" data-job-id="${escapeHtml(job.id)}" data-job-index="${revealIndex}">${buttonContent("file", "Reveal")}</button>`
+                    : ""
+                }
+                <button class="secondary compact" data-job-action="clear" data-job-id="${escapeHtml(job.id)}">${buttonContent("x", "Clear")}</button>
+              </div>
+            </div>
+          </div>
+        `
+      }
+
       return `
-        <div class="job">
+        <div class="job ${isJobFinal(job) ? "job-error" : ""}" data-job-id="${escapeHtml(job.id)}">
           <div class="template-title">
-            <strong>${escapeHtml(job.status)}</strong>
+            <strong>${escapeHtml(status)}</strong>
             <span class="file-meta">${job.completed}/${job.total} files</span>
           </div>
           <div class="progress" aria-label="Download progress"><span style="width: ${percent}%"></span></div>
           <div class="file-meta">${escapeHtml(current?.name || "Waiting")} - ${escapeHtml(formatBytes(downloaded))}${total ? ` / ${escapeHtml(formatBytes(total))}` : ""}</div>
+          ${current?.error ? `<div class="file-meta job-error-text">${escapeHtml(current.error)}</div>` : ""}
           ${current?.destination ? `<div class="path">${escapeHtml(current.destination)}</div>` : ""}
+          ${
+            isJobFinal(job)
+              ? `<div class="job-actions">
+                  <button class="secondary compact" data-job-action="clear" data-job-id="${escapeHtml(job.id)}">${buttonContent("x", "Clear")}</button>
+                </div>`
+              : ""
+          }
         </div>
       `
     })
@@ -1240,6 +1440,10 @@ async function selectView(view) {
 
 async function startDownload(template) {
   const models = template.models.filter((model) => !model.installed && model.downloadable)
+  return startModelDownload(template, models)
+}
+
+async function startModelDownload(template, models) {
   if (!models.length) return
   const job = await requestJson("/api/download", {
     method: "POST",
@@ -1332,6 +1536,16 @@ async function openFileNode(node) {
   setFilesNotice(result.directory ? `Opened ${node.name}.` : `Revealed ${node.name}.`)
 }
 
+async function revealJobItem(job, index) {
+  const item = job?.items?.[index]
+  if (!item?.destination) return
+  const result = await requestJson("/api/open-path", {
+    method: "POST",
+    body: JSON.stringify({ baseUrl: job.baseUrl || state.baseUrl, path: item.destination })
+  })
+  setNotice(result.directory ? `Opened ${item.name}.` : `Revealed ${item.name}.`)
+}
+
 function selectFileNodes(nodes, mode = "add") {
   if (mode === "replace") state.selectedFileIds.clear()
   for (const node of nodes) {
@@ -1406,6 +1620,7 @@ function pollJob(id) {
     try {
       const job = await requestJson(`/api/jobs/${id}`)
       state.jobs.set(id, job)
+      if (isJobSuccessful(job)) scheduleJobClear(job)
       if (applyCompletedDownloads(job)) {
         renderAll()
       } else {
@@ -1423,6 +1638,29 @@ function pollJob(id) {
   }, 1000)
   state.polling.set(id, timer)
 }
+
+els.jobs.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-job-action]")
+  if (!button) return
+  const job = state.jobs.get(button.dataset.jobId)
+  if (!job) return
+
+  if (button.dataset.jobAction === "clear") {
+    clearJob(job.id)
+    return
+  }
+
+  if (button.dataset.jobAction === "reveal") {
+    button.disabled = true
+    try {
+      await revealJobItem(job, Number(button.dataset.jobIndex))
+    } catch (error) {
+      setNotice(error.message, "error")
+    } finally {
+      button.disabled = false
+    }
+  }
+})
 
 els.form.addEventListener("submit", (event) => {
   event.preventDefault()
@@ -1571,12 +1809,12 @@ document.querySelectorAll(".filter[data-filter]").forEach((button) => {
 })
 
 document.addEventListener("click", async (event) => {
-  const comfyLink = event.target.closest('a[data-action="open-comfyui"]')
-  if (comfyLink) {
-    event.preventDefault()
-    window.open(comfyLink.href, "_blank", "browser")
-    return
-  }
+//  const comfyLink = event.target.closest('a[data-action="open-comfyui"]')
+//  if (comfyLink) {
+//    event.preventDefault()
+//    openComfyPopout(comfyLink.href)
+//    return
+//  }
 
   const button = event.target.closest("button[data-action]")
   if (!button) {
@@ -1595,6 +1833,18 @@ document.addEventListener("click", async (event) => {
     button.disabled = true
     try {
       await startDownload(template)
+    } catch (error) {
+      setNotice(error.message, "error")
+    } finally {
+      button.disabled = false
+    }
+  }
+  if (button.dataset.action === "download-model") {
+    const model = template.models[Number(button.dataset.modelIndex)]
+    if (!model || model.installed || !model.downloadable) return
+    button.disabled = true
+    try {
+      await startModelDownload(template, [model])
     } catch (error) {
       setNotice(error.message, "error")
     } finally {

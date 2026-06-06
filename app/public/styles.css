@@ -84,7 +84,6 @@ button,
   display: inline-flex;
   gap: 8px;
   align-items: center;
-  justify-content: center;
   min-height: 36px;
   border: 1px solid var(--accent);
   border-radius: var(--radius);
@@ -905,6 +904,33 @@ h3 {
   min-width: 0;
 }
 
+.open-comfyui-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  width: 100%;
+}
+
+.open-comfyui-group .open-comfyui-frame {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.open-comfyui-group .open-comfyui-popout {
+  width: 40px;
+  min-width: 40px;
+  padding: 0;
+  padding-left: 12px;
+  margin-left: 1px;
+  border-left-width: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.open-comfyui-group .open-comfyui-popout .button-icon {
+  width: 15px;
+  height: 15px;
+}
+
 .reference-list {
   display: grid;
   gap: 8px;
@@ -1266,6 +1292,68 @@ button.compact .button-icon {
   border-top: 0;
 }
 
+.job-complete {
+  padding-block: 9px;
+  background: color-mix(in oklch, var(--panel), var(--success-bg) 44%);
+}
+
+.job-error {
+  background: color-mix(in oklch, var(--panel), var(--danger-bg) 32%);
+}
+
+.job-compact {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.job-status-icon {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--success);
+  background: var(--success-bg);
+}
+
+.job-status-icon .button-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.job-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.job-copy strong,
+.job-copy span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-copy span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: end;
+  gap: 6px;
+}
+
+.job-error-text {
+  color: var(--danger);
+}
+
 .progress {
   height: 6px;
   overflow: hidden;
@@ -1348,6 +1436,15 @@ button.compact .button-icon {
   .card-actions,
   .file-summary {
     grid-template-columns: 1fr;
+  }
+
+  .job-compact {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .job-actions {
+    grid-column: 1 / -1;
+    justify-content: start;
   }
 
   .template-grid {

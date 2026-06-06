@@ -14,6 +14,7 @@ const DEFAULT_PORT = 42188
 const CATALOG_CACHE_MS = 30000
 const FILE_INVENTORY_CACHE_MS = 15000
 const PREVIEW_FETCH_TIMEOUT_MS = 30000
+const MODEL_SIZE_CACHE_MS = 6 * 60 * 60 * 1000
 const LARGE_FILE_BYTES = 1024 ** 3
 
 const MIME_TYPES = {
@@ -52,6 +53,7 @@ const DOWNLOAD_HOSTS = [
 
 const catalogCache = new Map()
 const fileInventoryCache = new Map()
+const modelSizeCache = new Map()
 const jobs = new Map()
 
 function getArg(name, fallback) {
@@ -491,8 +493,14 @@ function normalizeModelEntry(model) {
     directory,
     url: typeof model.url === "string" ? model.url : "",
     hash: typeof model.hash === "string" ? model.hash : "",
-    hash_type: typeof model.hash_type === "string" ? model.hash_type : ""
+    hash_type: typeof model.hash_type === "string" ? model.hash_type : "",
+    size: normalizeByteSize(model.size || model.filesize || model.file_size || model.bytes)
   }
+}
+
+function normalizeByteSize(value) {
+  const size = Number(value || 0)
+  return Number.isFinite(size) && size > 0 ? Math.round(size) : 0
 }
 
 function extractModelsFromWorkflow(workflow) {
@@ -565,6 +573,126 @@ function normalizeInstalledNames(files) {
     }
   }
   return names
+}
+
+function headerByteSize(headers) {
+  const linkedSize = normalizeByteSize(headers.get("x-linked-size"))
+  if (linkedSize) return linkedSize
+  const contentLength = normalizeByteSize(headers.get("content-length"))
+  if (contentLength) return contentLength
+  const contentRange = headers.get("content-range") || ""
+  const match = contentRange.match(/\/(\d+)$/)
+  return match ? normalizeByteSize(match[1]) : 0
+}
+
+function modelSizeCacheKey(model) {
+  return `${model.directory || ""}\n${model.name || ""}\n${model.url || ""}`
+}
+
+async function fetchRemoteModelSize(url, timeoutMs = 3500) {
+  if (!isAllowedDownloadUrl(url)) return 0
+  const cached = modelSizeCache.get(url)
+  if (cached && Date.now() - cached.createdAt < MODEL_SIZE_CACHE_MS) {
+    return cached.size
+  }
+
+  async function request(method, headers = {}) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const response = await fetch(url, {
+        method,
+        signal: controller.signal,
+        headers: {
+          "user-agent": "ComfyFS/0.1",
+          ...headers
+        }
+      })
+      const size = response.ok ? headerByteSize(response.headers) : 0
+      if (response.body) {
+        try {
+          await response.body.cancel()
+        } catch {
+          // The headers are all we need.
+        }
+      }
+      return size
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
+  let size = 0
+  try {
+    size = await request("HEAD")
+    if (!size) size = await request("GET", { range: "bytes=0-0" })
+  } catch {
+    size = 0
+  }
+  modelSizeCache.set(url, { createdAt: Date.now(), size })
+  return size
+}
+
+async function localModelSize(folderPaths, model) {
+  if (!model?.directory || !model.name) return 0
+  const roots = Array.isArray(folderPaths[model.directory]) ? folderPaths[model.directory] : []
+  if (!roots.length) return 0
+
+  let relativeName
+  try {
+    relativeName = cleanRelativeModelName(model.name)
+  } catch {
+    return 0
+  }
+
+  for (const rootPath of roots) {
+    if (typeof rootPath !== "string" || !rootPath.trim()) continue
+    const root = path.resolve(rootPath)
+    const candidates = [
+      path.resolve(root, relativeName),
+      path.resolve(root, path.basename(relativeName))
+    ]
+    for (const candidate of candidates) {
+      if (!isPathInsideRoot(candidate, root)) continue
+      try {
+        const linkStat = await fs.promises.lstat(candidate)
+        const stat = linkStat.isSymbolicLink()
+          ? await fs.promises.stat(candidate)
+          : linkStat
+        if (stat.isFile()) return stat.size
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error
+      }
+    }
+  }
+  return 0
+}
+
+async function resolveModelSizes(baseUrl, models) {
+  if (!Array.isArray(models) || !models.length) return []
+  const normalized = []
+  const seen = new Set()
+  for (const model of models) {
+    const entry = normalizeModelEntry(model)
+    if (!entry) continue
+    const key = modelSizeCacheKey(entry)
+    if (seen.has(key)) continue
+    seen.add(key)
+    normalized.push(entry)
+  }
+  if (!normalized.length) return []
+
+  const folderPaths = await fetchJson(buildUrl(baseUrl, "/internal/folder_paths"), 5000).catch(() => ({}))
+  return mapLimit(normalized, 4, async (model) => {
+    const localSize = await localModelSize(folderPaths, model)
+    const remoteSize = localSize || model.size || (model.url ? await fetchRemoteModelSize(model.url) : 0)
+    return {
+      name: model.name,
+      directory: model.directory,
+      url: model.url,
+      size: normalizeByteSize(remoteSize)
+    }
+  })
 }
 
 async function getInstalledModelMap(baseUrl, directories) {
@@ -1322,6 +1450,14 @@ async function handleApi(req, res, url) {
         fileInventoryCache.delete(baseUrl)
       }
       return sendJson(res, 200, await buildFileInventory(baseUrl))
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/model-sizes") {
+      const body = await readJson(req)
+      const baseUrl = normalizeBaseUrl(body.baseUrl)
+      return sendJson(res, 200, {
+        models: await resolveModelSizes(baseUrl, body.models)
+      })
     }
 
     if (req.method === "GET" && url.pathname === "/api/status") {
